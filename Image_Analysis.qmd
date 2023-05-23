@@ -1,0 +1,241 @@
+---
+title: "Enhancing Data Science Learning Through the Use of Images"
+format: html
+---
+
+```{r}
+#| message: false
+library(jpeg)
+library(scales)
+library(mosaic)
+library(caret)
+```
+
+Image Source: [https://www.sentinel-hub.com/](https://www.sentinel-hub.com/)
+Location: Stralsund
+Theme: Monitoring Earth from Space
+Date: 2023-04-21
+Licence: [https://creativecommons.org/licenses/by-nc/4.0/](https://creativecommons.org/licenses/by-nc/4.0/)
+
+![Satelite Image](Sentinel-2_Stralsund-2.jpg)
+
+```{r}
+img <- readJPEG("Sentinel-2_Stralsund-2.jpg")
+```
+
+## Image Data
+
+```{r}
+dimension <- dim(img)
+dimension
+```
+
+### Tidy data
+
+```{r}
+img_rgb <- data.frame(
+  x = rep(1:dimension[2], each = dimension[1]), # Row
+  y = rep(dimension[1]:1, dimension[2]), # Column
+  R = as.vector(img[,,1]), # Red
+  G = as.vector(img[,,2]), # Green
+  B = as.vector(img[,,3]) # Blue
+)
+
+# Check
+str(img_rgb)
+```
+
+### Number of colors
+
+```{r}
+n_color <- img_rgb %>%
+  select(R,G,B) %>%
+  unique() %>%
+  nrow()
+
+n_color
+```
+
+## k-means clustering
+
+```{r}
+set.seed(1896)
+k_means <- kmeans(img_rgb[,c("R","G","B")], centers = 8, 
+                  iter.max = 25, nstart = 10)
+```
+
+### Cluster centers 
+
+```{r}
+k_means$centers %>%
+  rgb() %>%
+  show_col()
+```
+
+```{r}
+coldist <- gf_col(k_means$size ~ 1:8, fill = rgb(k_means$centers)) %>%
+  gf_labs(x="cluster", y="size")
+coldist 
+# Save
+ggsave("Clusters.jpg", coldist , device = "jpg")
+```
+
+```{r}
+# Date frame
+reduced.df <- k_means$centers[k_means$cluster,]
+# Array
+img_new <- array(NA, dimension)
+for(i in 1:3) img_new[,,i] <- matrix(reduced.df[,i], nrow=dimension[1]) 
+# Save
+writeJPEG(img_new, "Satelite_reduced_cluster.jpg")
+```
+
+![Satelite Image: Cluster](Satelite_reduced_cluster.jpg)
+
+#### Colorblind friendly
+
+```{r}
+# Date frame
+reduced.df <- t(col2rgb(palette.colors(palette = "Okabe-Ito")[k_means$cluster+1]))/255
+# Array
+img_new <- array(NA, dimension)
+for(i in 1:3) img_new[,,i] <- matrix(reduced.df[,i], nrow=dimension[1]) 
+# Save
+writeJPEG(img_new, "Satelite_reduced_cluster_colorblind.jpg")
+```
+
+![Satelite Image: Cluster](Satelite_reduced_cluster_colorblind.jpg)
+
+## Principal component analysis
+
+```{r}
+pca <-prcomp(img_rgb[,c("R","G","B")])
+summary(pca)
+```
+
+```{r}
+scores <- predict(pca)[,1]
+```
+
+```{r}
+scores <- (scores-min(scores)) / (max(scores)-min(scores))
+```
+
+```{r}
+# Array
+img_new <- array(NA, c(dimension[1:2],1))
+img_new[,,1] <- scores
+# Save
+writeJPEG(img_new, "Satelite_reduced_pca.jpg")
+```
+
+![Satelite Image: PCA](Satelite_reduced_pca.jpg)
+
+## Modeling metaphor
+
+```{r}
+# n, i.e. number of pixels
+n <- dimension[1] * dimension[2]
+
+# Add some noise but trunctate to [0,1]
+set.seed(1896)
+# Standard Deviation of Gaussian noise
+sdn <- 0.1
+
+rgb_pictureNoise <- img_rgb %>%
+  mutate(R = R + rnorm(n = n, mean = 0, sd = sdn),
+         G = G + rnorm(n = n, mean = 0, sd = sdn),
+         B = B + rnorm(n = n, mean = 0, sd = sdn)) %>%
+  mutate(R = case_when(R < 0 ~ 0,
+                       R > 1 ~ 1,
+                       TRUE ~ R),
+         G = case_when(G < 0 ~ 0,
+                       G > 1 ~ 1,
+                       TRUE ~ G),
+         B = case_when(B < 0 ~ 0,
+                       B > 1 ~ 1,
+                       TRUE ~ B)
+         )
+
+# Convert back to picture
+picture_Noise <- array(NA, dimension)
+for(i in 1:3) picture_Noise[,,i] <- matrix(rgb_pictureNoise[,(i+2)], 
+                                           nrow = dimension[1]) 
+# Save picture as jpg
+writeJPEG(picture_Noise, "Stralsund-noise.jpg")
+```
+
+![Satelite Image: Noise](Stralsund-noise.jpg)
+
+```{r}
+frag <- 0.95
+rgb_pictureFrag <- rgb_pictureNoise %>%
+  mutate(white = rbinom(n, 1, frag)) %>%
+  mutate(R = ifelse(white == 1, 1, R),
+         G = ifelse(white == 1, 1, G),
+         B = ifelse(white == 1, 1, B))
+  
+# Convert to picture
+picture_Frag <- array(NA, dimension)
+for(i in 1:3) picture_Frag[,,i] <- matrix(rgb_pictureFrag[,(i+2)], 
+                                           nrow = dimension[1]) 
+# Save picture
+writeJPEG(picture_Frag, "Stralsund-Frag.jpg")
+```
+
+![Satelite Image: Noise+Fragmented](Stralsund-Frag.jpg)
+
+## knn-classification
+
+```{r}
+# Training data
+Train <- rgb_pictureFrag %>%
+  filter(white == 0)
+
+TrainXY <- Train %>%
+  select(x,y)
+TrainR <- Train %>% 
+  select(R) %>%
+  unlist()
+
+TrainG <- Train %>% 
+  select(G) %>%
+  unlist()
+
+TrainB <- Train %>% 
+  select(B) %>%
+  unlist()
+
+# Test data
+TestXY <- rgb_pictureFrag %>%
+  filter(white ==1) %>%
+  select(x,y)
+
+# Train model
+knnR <- knnreg(TrainXY, TrainR)
+# Predict color values
+predR <- predict(knnR, TestXY)
+knnG <- knnreg(TrainXY, TrainR)
+predG<- predict(knnG, TestXY)
+knnB <- knnreg(TrainXY, TrainR)
+predB <- predict(knnB, TestXY)
+
+# Combine data
+Test <- TestXY %>%
+  mutate(pR = predR, pG = predG, pB = predB)
+
+NewPic <- rgb_pictureFrag %>% 
+  left_join(Test) %>%
+  mutate(R = ifelse(is.na(pR), R, pR),
+         G = ifelse(is.na(pG), G, pG),
+         B = ifelse(is.na(pB), B, pB))
+
+# Convert to picture
+picture_Rec <- array(NA, dimension)
+for(i in 1:3) picture_Rec[,,i] <- matrix(NewPic[,(i+2)], 
+                                          nrow = dimension[1]) 
+# Save picture
+writeJPEG(picture_Rec, "Stralsund-Rec.jpg")
+```
+
+![Satelite Image: Reconstruction](Stralsund-Rec.jpg)
