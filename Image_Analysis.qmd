@@ -43,6 +43,7 @@ img_rgb <- data.frame(
 
 # Check
 str(img_rgb)
+head(img_rgb)
 ```
 
 ### Number of colors
